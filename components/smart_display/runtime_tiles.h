@@ -3787,8 +3787,16 @@ struct AlarmPad {
   std::string code, entity;
   uint16_t note=0;      // a line in place of "Enter code" (Wrong code, Nothing changed), 0 for none
   uint32_t note_at=0, shake_at=0;
+  // issue c5ccc0ab: the pad the entry delay opens by itself (not one the user tapped open) is dismissed
+  // after a while so it never lingers. auto_opened marks that pad; auto_opened_at is when it opened or was
+  // last touched (the window restarts on a keypad touch). A manually opened pad leaves auto_opened false.
+  bool auto_opened=false;
+  uint32_t auto_opened_at=0;
 };
 inline AlarmPad alarm_pad;
+// issue c5ccc0ab: how long an auto-opened disarm pad stays before it closes on its own and the screen goes
+// back to the page that was showing (five minutes).
+inline constexpr uint32_t ALARM_AUTO_DISMISS_MS=5*60*1000;
 inline alarm_panel::Attempt alarm_attempt;
 inline std::string alarm_attempt_entity;
 inline alarm_panel::Lockout alarm_lock;
@@ -3852,7 +3860,7 @@ inline std::string alarm_card_line(const Tile &t){
 inline bool alarm_pad_open(){return alarm_pad.open&&detail_index<model.count&&model.tiles[detail_index].entity==alarm_pad.entity;}
 // A code leaves no copy behind: the bytes are overwritten before the string lets them go.
 inline void alarm_wipe(std::string &code){for(char &c:code)c='\0';code.clear();}
-inline void alarm_close_pad(){alarm_wipe(alarm_pad.code);alarm_pad.open=false;alarm_pad.note=0;}
+inline void alarm_close_pad(){alarm_wipe(alarm_pad.code);alarm_pad.open=false;alarm_pad.note=0;alarm_pad.auto_opened=false;}
 inline void alarm_save_lock(){
   AlarmSaved saved{alarm_lock.failures,alarm_lock.remaining_s(esphome::millis())};
   alarm_preference.save(&saved);
@@ -3909,6 +3917,7 @@ inline void alarm_choose(Tile &t,unsigned mode){
   if(needs_code(codes,mode)){
     if(!code_typable(codes)){alarm_card_note=txt::alarm_letters;alarm_card_note_at=esphome::millis();redraw_detail();return;}
     alarm_wipe(alarm_pad.code);alarm_pad.open=true;alarm_pad.mode=mode;alarm_pad.note=0;alarm_pad.entity=t.entity;
+    alarm_pad.auto_opened=false;  // issue c5ccc0ab: the user tapped this open, so it is never auto-dismissed.
     redraw_detail();
     return;
   }
@@ -4246,11 +4255,17 @@ inline void alarm_state_arrived(unsigned index,const std::string &before){
   ESP_LOGI("alarm","%s is %s: the screen wakes with its card",t.entity.c_str(),t.state.c_str());
   if(alarm_wake)alarm_wake();
   settings_screen::close();
+  // issue 4a0bf1ac: when the alarm goes off (triggered) the screen wakes on the CURRENT page but no
+  // longer auto-opens the disarm pad or jumps to the alarm card. The entry-delay states (pending)
+  // still open the pad as before, and manual open / mode / PIN / back are unchanged.
+  if(t.state=="triggered")return;
   const auto codes=alarm_codes(t);
   if(alarm_pad.entity!=t.entity)alarm_close_pad();
   alarm_pad.entity=t.entity;
   if(alarm_panel::needs_code(codes,alarm_panel::DISARM)&&alarm_panel::code_typable(codes)&&!alarm_pad.open){
     alarm_pad.open=true;alarm_pad.mode=alarm_panel::DISARM;alarm_pad.note=0;alarm_wipe(alarm_pad.code);
+    // issue c5ccc0ab: this pad opened by itself (entry delay / pending), so start the auto-dismiss clock.
+    alarm_pad.auto_opened=true;alarm_pad.auto_opened_at=esphome::millis();
   }
   active_index=(int)index;
   show_detail(index);
@@ -4272,6 +4287,12 @@ inline void alarm_tick(){
   const bool locked=alarm_lock.locked(now);
   if(was_locked&&!locked)alarm_save_lock();
   was_locked=locked;
+  // issue c5ccc0ab: a disarm pad the entry delay opened by itself must not linger. Five minutes after it
+  // opened (or after the last keypad touch) close it and let the screen fall back to the page that was
+  // showing before. A manually opened pad has auto_opened=false and is left alone. This also bounds the
+  // pending->triggered case: alarm_state_arrived returns early on 'triggered' (before already called for
+  // attention), so the pad stays usable to disarm a sounding alarm but can never hang open forever.
+  if(alarm_pad.auto_opened&&alarm_pad_open()&&(uint32_t)(now-alarm_pad.auto_opened_at)>=ALARM_AUTO_DISMISS_MS)hide_detail();
 #if LV_USE_ARC
   if(alarm_ring&&detail_index<model.count){
     const auto &t=model.tiles[detail_index];
@@ -4289,6 +4310,8 @@ inline void alarm_command(int cmd){
     if(!alarm_pad.open||alarm_lock.locked(now)||alarm_attempt.active||alarm_pad.code.size()>=alarm_panel::CODE_MAX)return;
     if(!screen_input::touch_guard.accept_repeat(now,300+cmd))return;
     alarm_pad.code+=(char)('0'+cmd-ALARM_DIGIT_FIRST);alarm_pad.note=0;
+    // issue c5ccc0ab: someone is typing — restart the auto-dismiss window so an active entry is not cut off.
+    if(alarm_pad.auto_opened)alarm_pad.auto_opened_at=now;
     // The dots follow the finger at once; a fifth digit makes the row longer, so it is drawn again.
     alarm_draw_dots(alarm_keypad_layout);
     alarm_keys_state();
@@ -4392,7 +4415,7 @@ inline void lock_do(unsigned index,lock_panel::Act act,bool card){
   if(needs_code(x.code_format,x.code_saved)){
     t.ask_act=-1;
     if(!code_typable(x.code_format)){alarm_card_note=txt::alarm_letters;alarm_card_note_at=now;}
-    else{alarm_wipe(alarm_pad.code);alarm_pad.open=true;alarm_pad.mode=act;alarm_pad.note=0;alarm_pad.entity=t.entity;}
+    else{alarm_wipe(alarm_pad.code);alarm_pad.open=true;alarm_pad.mode=act;alarm_pad.note=0;alarm_pad.entity=t.entity;alarm_pad.auto_opened=false;}  // issue c5ccc0ab: user-opened, never auto-dismissed
     if(card)redraw_detail();else{active_index=(int)index;show_detail(index);}
     return;
   }
