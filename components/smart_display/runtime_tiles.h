@@ -4246,6 +4246,10 @@ inline void alarm_state_arrived(unsigned index,const std::string &before){
   ESP_LOGI("alarm","%s is %s: the screen wakes with its card",t.entity.c_str(),t.state.c_str());
   if(alarm_wake)alarm_wake();
   settings_screen::close();
+  // issue 4a0bf1ac: when the alarm goes off (triggered) the screen wakes on the CURRENT page but no
+  // longer auto-opens the disarm pad or jumps to the alarm card. The entry-delay states (pending)
+  // still open the pad as before, and manual open / mode / PIN / back are unchanged.
+  if(t.state=="triggered")return;
   const auto codes=alarm_codes(t);
   if(alarm_pad.entity!=t.entity)alarm_close_pad();
   alarm_pad.entity=t.entity;
