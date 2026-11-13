@@ -1,3 +1,8 @@
+## 0.4.98 (firmware 0.60.1)
+
+- **A triggered alarm wakes the screen but no longer takes it over.** When an `alarm_control_panel` went off (state `triggered`), the screen auto-opened the disarm keypad and jumped to the alarm card, interrupting whatever was showing. It now wakes on the current page and leaves it there; the entry-delay state (`pending`) still opens the pad to let you disarm in time, and manual open, mode, PIN and back are unchanged.
+- **The entry-delay disarm pad no longer hangs open.** When the entry delay opened the pad by itself and nobody acted, it stayed up until dismissed by hand. It now closes five minutes after it auto-opened and the screen falls back to the page that was showing before; each keypad touch restarts that window, so an active entry is never cut off, and a pad you opened yourself is never dismissed this way.
+
 ## 0.4.97 (firmware 0.60.0)
 
 - **Replacing a screen in New screen takes the old screen out of Tessera too.** In 0.4.96 only its device left Home Assistant, and its profile stayed in the sidebar as a screen still waiting for its firmware. The old screen now goes the way Remove takes it: out of Home Assistant, its YAML out of the ESPHome folder, and everything Tessera kept for it.
